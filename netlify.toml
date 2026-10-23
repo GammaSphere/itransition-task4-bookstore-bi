@@ -1,0 +1,13 @@
+[build]
+  publish = "site"
+  edge_functions = "netlify/edge-functions"
+
+[[headers]]
+  for = "/data/*"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
+
+[[headers]]
+  for = "/data/*.gz"
+  [headers.values]
+    Content-Type = "application/octet-stream"

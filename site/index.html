@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bookstore BI</title>
+  <meta name="description" content="Sales dashboard for five book stores with an AI analyst that answers questions with SQL and operates the dashboard.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23206bc4' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 19a9 9 0 0 1 9 0a9 9 0 0 1 9 0'/%3E%3Cpath d='M3 6a9 9 0 0 1 9 0a9 9 0 0 1 9 0'/%3E%3Cpath d='M3 6l0 13'/%3E%3Cpath d='M12 6l0 13'/%3E%3Cpath d='M21 6l0 13'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/css/tabler.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.31.0/dist/tabler-icons.min.css">
+  <link rel="stylesheet" href="assets/app.css">
+  <script>
+    // Apply the saved theme before first paint to avoid a flash.
+    try {
+      const t = localStorage.getItem("bookstore-bi-theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.setAttribute("data-bs-theme", t);
+      document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  </script>
+</head>
+<body>
+  <div class="page">
+    <header class="navbar navbar-expand-md d-print-none sticky-top app-navbar">
+      <div class="container-xl">
+        <a href="#SUMMARY" class="navbar-brand pe-3">
+          <i class="ti ti-books brand-icon" aria-hidden="true"></i>
+          <span>Bookstore&nbsp;BI</span>
+        </a>
+        <div class="navbar-nav flex-row order-md-last ms-auto gap-1">
+          <button class="btn btn-ghost-secondary btn-icon" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme"><i class="ti ti-moon"></i></button>
+          <button class="btn btn-primary" id="chat-toggle"><i class="ti ti-sparkles me-1"></i><span class="d-none d-sm-inline">AI analyst</span></button>
+        </div>
+        <ul class="navbar-nav store-tabs flex-row" id="store-tabs" role="tablist"></ul>
+      </div>
+    </header>
+
+    <div class="page-wrapper">
+      <div class="page-header d-print-none">
+        <div class="container-xl">
+          <div class="page-pretitle" id="page-pretitle">&nbsp;</div>
+          <h2 class="page-title" id="page-title">Loading…</h2>
+        </div>
+      </div>
+
+      <div class="page-body">
+        <div class="container-xl">
+
+          <!-- ============================== one store ============================== -->
+          <section id="view-store">
+            <div class="row row-cards" id="kpis"></div>
+
+            <div class="row row-cards mt-0">
+              <div class="col-lg-5">
+                <div class="card h-100">
+                  <div class="card-header">
+                    <h3 class="card-title"><i class="ti ti-calendar-star me-2 text-secondary"></i>Top 5 days by revenue</h3>
+                  </div>
+                  <div class="table-responsive">
+                    <table class="table table-vcenter card-table">
+                      <thead><tr><th>Rank</th><th>Date</th><th>Revenue</th><th class="text-end">Orders</th></tr></thead>
+                      <tbody id="top5"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+              <div class="col-lg-7">
+                <div class="card h-100">
+                  <div class="card-header">
+                    <h3 class="card-title"><i class="ti ti-trophy me-2 text-secondary"></i>Most popular author set</h3>
+                    <span class="card-subtitle ms-2">by copies sold</span>
+                  </div>
+                  <div class="card-body" id="popular-author"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row row-cards mt-0">
+              <div class="col-12">
+                <div class="card">
+                  <div class="card-header">
+                    <h3 class="card-title"><i class="ti ti-crown me-2 text-secondary"></i>Best buyer</h3>
+                    <span class="card-subtitle ms-2">all user ids of the top-spending person, including aliases</span>
+                  </div>
+                  <div class="card-body" id="best-buyer"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row row-cards mt-0">
+              <div class="col-12">
+                <div class="card" id="revenue-card">
+                  <div class="card-header flex-wrap gap-2">
+                    <div>
+                      <h3 class="card-title"><i class="ti ti-chart-line me-2 text-secondary"></i>Daily revenue</h3>
+                      <div class="card-subtitle small" id="chart-range"></div>
+                    </div>
+                    <div class="card-actions d-flex align-items-center flex-wrap gap-2 ms-auto">
+                      <div class="btn-group btn-group-sm" role="group" aria-label="Granularity">
+                        <button class="btn btn-outline-secondary" data-granularity="day">Day</button>
+                        <button class="btn btn-outline-secondary" data-granularity="week">Week</button>
+                        <button class="btn btn-outline-secondary" data-granularity="month">Month</button>
+                      </div>
+                      <label class="form-check form-switch m-0">
+                        <input class="form-check-input" type="checkbox" id="avg-toggle" checked>
+                        <span class="form-check-label small">7-day average</span>
+                      </label>
+                      <button class="btn btn-sm btn-ghost-secondary" id="chart-reset"><i class="ti ti-zoom-reset me-1"></i>Reset</button>
+                      <a class="btn btn-sm btn-ghost-secondary" id="static-chart-link" target="_blank" rel="noopener" title="Static chart rendered with matplotlib by the pipeline"><i class="ti ti-photo me-1"></i>matplotlib</a>
+                    </div>
+                  </div>
+                  <div class="card-body pt-2"><div id="revenue-chart"></div></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="row row-cards mt-0">
+              <div class="col-12">
+                <div class="card" id="explorer"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============================== all stores ============================== -->
+          <section id="view-summary" hidden>
+            <div class="card">
+              <div class="card-header"><h3 class="card-title"><i class="ti ti-table me-2 text-secondary"></i>Results per store</h3></div>
+              <div class="table-responsive">
+                <table class="table table-vcenter card-table summary-table">
+                  <thead>
+                    <tr>
+                      <th>Store</th><th>Top 5 days by revenue</th><th class="text-end">Unique users</th>
+                      <th class="text-end">Author sets</th><th>Most popular author(s)</th><th>Best buyer ids</th><th class="text-end">Revenue</th>
+                    </tr>
+                  </thead>
+                  <tbody id="summary-table"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="card mt-3">
+              <div class="card-header"><h3 class="card-title"><i class="ti ti-chart-line me-2 text-secondary"></i>Monthly revenue by store</h3></div>
+              <div class="card-body"><div id="comparison-chart"></div></div>
+            </div>
+          </section>
+
+          <footer class="text-secondary small py-4">
+            Data cleaned with pandas (prices in 8 notations, ~160 timestamp layouts, user reconciliation).
+            Source on <a href="https://github.com/GammaSphere/itransition-task4-bookstore-bi" target="_blank" rel="noopener">GitHub</a>.
+          </footer>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== chat ============================== -->
+  <aside id="chat-panel" class="chat-panel" aria-label="AI analyst">
+    <div class="chat-header">
+      <div class="d-flex align-items-center gap-2">
+        <span class="avatar avatar-sm bg-primary-lt"><i class="ti ti-sparkles"></i></span>
+        <div>
+          <div class="fw-medium">AI analyst</div>
+          <div class="text-secondary small">Gemini · answers via SQL tools</div>
+        </div>
+      </div>
+      <div class="ms-auto d-flex gap-1">
+        <button class="btn btn-ghost-secondary btn-icon btn-sm" data-chat-reset title="New chat" aria-label="New chat"><i class="ti ti-refresh"></i></button>
+        <button class="btn btn-ghost-secondary btn-icon btn-sm" id="chat-close" title="Close" aria-label="Close chat"><i class="ti ti-x"></i></button>
+      </div>
+    </div>
+    <div class="chat-log" data-chat-log aria-live="polite"></div>
+    <form class="chat-form" data-chat-form>
+      <textarea class="form-control" rows="1" placeholder="Ask a question or give a command…" data-chat-input aria-label="Message"></textarea>
+      <button class="btn btn-primary btn-icon" type="submit" data-chat-send aria-label="Send"><i class="ti ti-send"></i></button>
+    </form>
+  </aside>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/js/tabler.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts@3.54.1/dist/apexcharts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sql.js@1.12.0/dist/sql-wasm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+  <script type="module" src="assets/js/main.js"></script>
+</body>
+</html>
