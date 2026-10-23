@@ -6,7 +6,7 @@ A sales dashboard for five book stores, with a built-in AI analyst.
 - **Part 2:** you can ask questions in natural language. The model (Google Gemini) never sees the raw data. It answers by calling tools that run exact SQL over the cleaned per-store databases.
 - **Part 3:** the same assistant operates the dashboard. It can filter, hide, highlight and sort tables, switch stores, zoom and re-bucket the chart, and switch the theme.
 
-Live dashboard: _see the Netlify URL in the repository description_
+Live dashboard: **https://itransition-bookstore-bi.netlify.app**
 
 ## Results
 

@@ -159,7 +159,7 @@ export class Chat {
     this.scroll();
   }
 
-  async callModel() {
+  async callModel(retry = true) {
     const res = await fetch("api/chat", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -167,11 +167,16 @@ export class Chat {
     });
     let data = null;
     try {
-      data = await res.json();
+      data = await res.json(); // the edge function streams heartbeat spaces before the JSON
     } catch {
       /* non-JSON error page */
     }
-    if (!res.ok || !data?.content) {
+    // Model calls report their real status inside the streamed body.
+    const status = data?.status ?? res.status;
+    // A cold model gateway can fail once; the second attempt is normally fast.
+    if (retry && [500, 502, 504].includes(status)) return this.callModel(false);
+    if (status !== 200 || !data?.content) {
+      if (data?.details) console.warn("Assistant error details:", data.details);
       throw new Error(data?.error || `The assistant is unavailable (HTTP ${res.status}).`);
     }
     return data;

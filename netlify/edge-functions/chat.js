@@ -215,23 +215,119 @@ function baseUrls() {
 
 const isAuthError = (status, text) => status === 401 || status === 403 || (status === 400 && /API[_ ]KEY/i.test(text));
 
-async function callGemini(model, apiKey, body) {
+// Upstream calls are bounded; the client sees progress through heartbeats meanwhile (see streamJson).
+const ATTEMPT_TIMEOUT_MS = 45_000;
+const TOTAL_BUDGET_MS = 100_000;
+const HEARTBEAT_MS = 5_000;
+
+async function callGemini(model, apiKey, body, deadline) {
   let last;
   for (const base of baseUrls()) {
-    const res = await fetch(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify(body),
-    });
+    const remaining = Math.min(ATTEMPT_TIMEOUT_MS, deadline - Date.now());
+    if (remaining < 1000) return last || new Response("time budget exhausted", { status: 504 });
+    const started = Date.now();
+    let res;
+    try {
+      res = await fetch(`${base}/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(remaining),
+      });
+    } catch (e) {
+      last = new Response(`${new URL(base).host}: ${e.name} after ${Date.now() - started}ms`, { status: 504 });
+      continue;
+    }
     if (res.ok) return res;
     const text = await res.text();
-    last = new Response(text, { status: res.status });
+    last = new Response(`${new URL(base).host}: ${text}`, { status: res.status });
     if (!isAuthError(res.status, text)) return last;
   }
   return last;
 }
 
+/** Try each model in turn; resolves to { status, body } for the client. */
+async function runModels(models, apiKey, body) {
+  const failures = [];
+  const deadline = Date.now() + TOTAL_BUDGET_MS;
+  for (const model of models) {
+    if (deadline - Date.now() < 1000) break;
+    let res = await callGemini(model, apiKey, body, deadline);
+    // Occasional 400s from the gateway/model are transient; one retry tells them apart from real content errors.
+    if (res.status === 400 && !/thinking/i.test(await res.clone().text())) {
+      res = await callGemini(model, apiKey, body, deadline);
+    }
+    if (res.status === 400) {
+      // Some models reject a thinking level they don't support; retry once without it.
+      const detail = await res.text();
+      if (/thinking/i.test(detail)) {
+        const { thinkingConfig, ...rest } = body.generationConfig;
+        res = await callGemini(model, apiKey, { ...body, generationConfig: rest }, deadline);
+      } else {
+        // The request itself is wrong; every other model would reject it the same way.
+        return { status: 400, body: { error: "The assistant could not process this conversation. Start a new chat.", details: [`${model}: ${detail.slice(0, 300)}`] } };
+      }
+    }
+    if (res.ok) {
+      const data = await res.json();
+      const candidate = data.candidates?.[0];
+      if (!candidate?.content?.parts?.length) {
+        failures.push(`${model}: empty response (${candidate?.finishReason || data.promptFeedback?.blockReason || "unknown"})`);
+        continue;
+      }
+      return {
+        status: 200,
+        body: { model, content: { role: "model", parts: candidate.content.parts }, finishReason: candidate.finishReason, usage: data.usageMetadata },
+      };
+    }
+    // 429 (quota), 404 (model unavailable to this key), 5xx, timeouts: fall through to the next model.
+    failures.push(`${model}: ${res.status} ${(await res.text()).slice(0, 300)}`);
+  }
+  const quota = failures.some((f) => /: 429 /.test(f));
+  return {
+    status: quota ? 429 : 502,
+    body: {
+      error: quota ? "The Gemini quota is exhausted for now. Please try again in a minute." : "The language model is unavailable right now.",
+      details: failures,
+    },
+  };
+}
+
+// Netlify requires response headers within 40s, but a model call can take longer (cold gateway,
+// long outputs). So headers go out at once, spaces keep the connection alive, and the JSON
+// (leading whitespace is valid JSON) carries the real status in its "status" field.
+function streamJson(work) {
+  const enc = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      controller.enqueue(enc.encode(" "));
+      const beat = setInterval(() => controller.enqueue(enc.encode(" ")), HEARTBEAT_MS);
+      let result;
+      try {
+        result = await work();
+      } catch (e) {
+        result = { status: 500, body: { error: "The assistant failed unexpectedly.", details: [String(e?.message || e)] } };
+      }
+      clearInterval(beat);
+      controller.enqueue(enc.encode(JSON.stringify({ ...result.body, status: result.status })));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
 export default async (request) => {
+  if (request.method === "GET") {
+    // Health check without secrets: is a key present, and which API host will be tried first.
+    return json(200, {
+      configured: Boolean(Netlify.env.get("GEMINI_API_KEY")),
+      api_hosts: baseUrls().map((u) => new URL(u).host),
+      models: (Netlify.env.get("GEMINI_MODELS") || DEFAULT_MODELS).split(","),
+    });
+  }
   if (request.method !== "POST") return json(405, { error: "Use POST" });
   const apiKey = Netlify.env.get("GEMINI_API_KEY");
   if (!apiKey) return json(503, { error: "The assistant is not configured: GEMINI_API_KEY is missing on the server." });
@@ -254,7 +350,10 @@ export default async (request) => {
 
   const body = {
     systemInstruction: {
-      parts: [{ text: `${SYSTEM_PROMPT}\n\n## Dashboard state\nToday is ${today}. ${describeState(payload.ui_state)}` }],
+      parts: [{ text: `${SYSTEM_PROMPT}
+
+## Dashboard state
+Today is ${today}. ${describeState(payload.ui_state)}` }],
     },
     contents,
     tools: [{ functionDeclarations: TOOLS }],
@@ -262,44 +361,7 @@ export default async (request) => {
     generationConfig: { temperature: 0.2, maxOutputTokens: 8192, thinkingConfig: { thinkingLevel } },
   };
 
-  const failures = [];
-  for (const model of models) {
-    let res = await callGemini(model, apiKey, body);
-    if (res.status === 400) {
-      // Some models reject a thinking level they don't support; retry once without it.
-      const detail = await res.text();
-      if (/thinking/i.test(detail)) {
-        const { thinkingConfig, ...rest } = body.generationConfig;
-        res = await callGemini(model, apiKey, { ...body, generationConfig: rest });
-      } else {
-        // The request itself is wrong; every other model would reject it the same way.
-        return json(400, { error: "The assistant could not process this conversation. Start a new chat.", details: [`${model}: ${detail.slice(0, 300)}`] });
-      }
-    }
-    if (res.ok) {
-      const data = await res.json();
-      const candidate = data.candidates?.[0];
-      if (!candidate?.content?.parts?.length) {
-        failures.push(`${model}: empty response (${candidate?.finishReason || data.promptFeedback?.blockReason || "unknown"})`);
-        continue;
-      }
-      return json(200, {
-        model,
-        content: { role: "model", parts: candidate.content.parts },
-        finishReason: candidate.finishReason,
-        usage: data.usageMetadata,
-      });
-    }
-    // 429 (quota), 404 (model unavailable to this key), 5xx: fall through to the next model.
-    failures.push(`${model}: ${res.status} ${(await res.text()).slice(0, 300)}`);
-  }
-  const quota = failures.some((f) => /: 429 /.test(f));
-  return json(quota ? 429 : 502, {
-    error: quota
-      ? "The free Gemini quota is exhausted for now. Please try again in a minute."
-      : "The language model is unavailable right now.",
-    details: failures,
-  });
+  return streamJson(() => runModels(models, apiKey, body));
 };
 
 export const config = { path: "/api/chat" };
