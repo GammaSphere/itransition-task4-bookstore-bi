@@ -95,6 +95,8 @@ body.chat-open .chat-panel { transform: none; box-shadow: var(--tblr-shadow-drop
 .chat-log { flex: 1; overflow-y: auto; padding: 1rem; display: flex; flex-direction: column; gap: .75rem; }
 .chat-form { display: flex; gap: .5rem; align-items: flex-end; padding: .75rem 1rem; border-top: 1px solid var(--tblr-border-color); }
 .chat-form textarea { resize: none; max-height: 160px; }
+/* Netlify injects a fixed "Powered by Netlify" badge bottom-right on production; keep Send clickable above it. */
+body:has(#nl-badge-frame) .chat-form { padding-bottom: 64px; }
 
 .chat-welcome-title { font-weight: 600; margin-bottom: .35rem; }
 .chat-welcome-title .ti { color: var(--tblr-primary); }
